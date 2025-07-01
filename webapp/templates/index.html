@@ -1,0 +1,236 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>KcMapper - Web Analyzer</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body { background-color: #111827; color: #d1d5db; }
+        .table-cell { padding: 0.75rem 1rem; border-bottom: 1px solid #374151; white-space: pre-wrap; word-break: break-all; }
+        .sidebar-item { display: block; padding: 0.5rem 1rem; border-radius: 0.375rem; }
+        .sidebar-item:hover { background-color: #374151; }
+        .summary-arrow { transition: transform 0.2s; }
+        details[open] .summary-arrow { transform: rotate(90deg); }
+    </style>
+</head>
+<body class="font-sans">
+    <div class="flex h-screen bg-gray-900">
+        <!-- Sidebar -->
+        <aside class="w-1/3 lg:w-1/4 bg-gray-800 p-4 overflow-y-auto border-r border-gray-700">
+            <h1 class="text-2xl font-bold text-white mb-4">KcMapper Queries</h1>
+            <nav id="query-list-container" class="space-y-2"></nav>
+        </aside>
+        <!-- Main Content -->
+        <main class="flex-1 p-6 lg:p-8 overflow-y-auto">
+            <div id="welcome-message">
+                <h2 class="text-3xl font-bold text-white">Welcome to KcMapper Analyzer</h2>
+                <p class="mt-2 text-gray-400">Select a query from the sidebar to begin.</p>
+            </div>
+            <div id="main-content-area" class="hidden">
+                 <h2 id="query-title" class="text-3xl font-bold text-white mb-2"></h2>
+                 <p id="query-description" class="text-gray-400 mb-6"></p>
+                <div id="params-form" class="mb-6 space-y-4 bg-gray-800 p-6 rounded-lg"></div>
+                <button id="execute-btn" class="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 px-4 rounded-lg transition-colors">Execute Query</button>
+                <div id="results-container" class="mt-8">
+                    <div id="loading" class="hidden text-center p-4"><p>Loading...</p></div>
+                    <div id="error-message" class="hidden bg-red-900/50 border border-red-700 text-red-300 p-4 rounded-lg"></div>
+                    <div id="results-table-container" class="hidden">
+                        <h3 class="text-2xl font-semibold text-white mb-4">Results</h3>
+                        <div class="bg-gray-800 rounded-lg shadow-lg overflow-x-auto">
+                            <table id="results-table" class="min-w-full"><thead id="results-table-head" class="bg-gray-700"></thead><tbody id="results-table-body"></tbody></table>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </main>
+    </div>
+    <script>
+        document.addEventListener('DOMContentLoaded', () => {
+            const queryListContainer = document.getElementById('query-list-container');
+            const mainContentArea = document.getElementById('main-content-area');
+            const welcomeMessage = document.getElementById('welcome-message');
+            const queryTitle = document.getElementById('query-title');
+            const queryDescription = document.getElementById('query-description');
+            const paramsForm = document.getElementById('params-form');
+            const executeBtn = document.getElementById('execute-btn');
+            const loadingDiv = document.getElementById('loading');
+            const errorDiv = document.getElementById('error-message');
+            const resultsTableContainer = document.getElementById('results-table-container');
+            const resultsTableHead = document.getElementById('results-table-head');
+            const resultsTableBody = document.getElementById('results-table-body');
+            let queriesData = {};
+            let currentQueryName = null;
+            async function fetchAndBuildSidebar() {
+                try {
+                    const response = await fetch('/api/queries');
+                    queriesData = await response.json();
+                    buildAccordion(queriesData);
+                } catch (error) {
+                    console.error('Failed to load queries:', error);
+                    queryListContainer.innerHTML = '<p class="text-red-400">Could not load queries.</p>';
+                }
+            }
+            function buildAccordion(data) {
+                const groupedQueries = {};
+                for (const name in data) {
+                    const query = data[name];
+                    const category = query.category || 'Uncategorized';
+                    if (!groupedQueries[category]) groupedQueries[category] = [];
+                    groupedQueries[category].push({ key: name, ...query });
+                }
+                queryListContainer.innerHTML = '';
+                const sortedCategories = Object.keys(groupedQueries).sort((a, b) => a.localeCompare(b));
+                sortedCategories.forEach(category => {
+                    const details = document.createElement('details');
+                    details.open = true;
+                    details.className = "text-white";
+                    const summary = document.createElement('summary');
+                    summary.className = "flex justify-between items-center p-2 font-semibold cursor-pointer list-none bg-gray-700 rounded-lg hover:bg-gray-600";
+                    summary.innerHTML = `<span>${category}</span><svg class="w-5 h-5 summary-arrow" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"></path></svg>`;
+                    const listDiv = document.createElement('div');
+                    listDiv.className = 'pl-4 mt-1 space-y-1';
+                    groupedQueries[category].sort((a, b) => a.name.localeCompare(b.name)).forEach(query => {
+                        const queryLink = document.createElement('a');
+                        queryLink.href = '#';
+                        queryLink.className = 'sidebar-item text-sm text-gray-300';
+                        queryLink.textContent = query.name;
+                        queryLink.addEventListener('click', (e) => { e.preventDefault(); displayQueryForm(query.key, query); });
+                        listDiv.appendChild(queryLink);
+                    });
+                    details.appendChild(summary);
+                    details.appendChild(listDiv);
+                    queryListContainer.appendChild(details);
+                });
+            }
+            async function populateAutocomplete(inputElement, sourceQuery, dependentParams = {}) {
+                const datalistId = inputElement.getAttribute('list');
+                const datalist = document.getElementById(datalistId);
+                try {
+                    const response = await fetch('/api/autocomplete', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ source_query: sourceQuery, params: dependentParams })
+                    });
+                    const suggestions = await response.json();
+                    datalist.innerHTML = '';
+                    suggestions.forEach(item => {
+                        const option = document.createElement('option');
+                        option.value = item;
+                        datalist.appendChild(option);
+                    });
+                } catch (error) {
+                    console.error(`Failed to load autocomplete for ${sourceQuery}`, error);
+                }
+            }
+            function displayQueryForm(key, details) {
+                currentQueryName = key;
+                hideResults();
+                welcomeMessage.classList.add('hidden');
+                mainContentArea.classList.remove('hidden');
+                queryTitle.textContent = details.name;
+                queryDescription.textContent = details.description || '';
+                paramsForm.innerHTML = '';
+                const params = details.params || [];
+                if (params.length > 0) {
+                     paramsForm.innerHTML = '<h3 class="font-semibold text-lg text-white mb-3">Parameters</h3>';
+                     params.forEach(param => {
+                        const datalistId = `datalist-${param.name}`;
+                        const paramDiv = document.createElement('div');
+                        paramDiv.innerHTML = `<label for="param-${param.name}" class="block mb-1 text-sm font-medium text-gray-400">${param.name}</label><input type="text" id="param-${param.name}" name="${param.name}" class="bg-gray-700 border border-gray-600 text-white text-sm rounded-lg w-full p-2.5" list="${datalistId}" required><datalist id="${datalistId}"></datalist>`;
+                        paramsForm.appendChild(paramDiv);
+                        const inputElement = paramDiv.querySelector('input');
+                        if (param.autocomplete) {
+                            if (param.depends_on) {
+                                const dependencyInput = document.getElementById(`param-${param.depends_on}`);
+                                if(dependencyInput) {
+                                    dependencyInput.addEventListener('change', () => {
+                                        const dependentParams = { [param.depends_on]: dependencyInput.value };
+                                        populateAutocomplete(inputElement, param.autocomplete, dependentParams);
+                                    });
+                                }
+                            } else {
+                                populateAutocomplete(inputElement, param.autocomplete);
+                            }
+                        }
+                     });
+                } else {
+                    paramsForm.innerHTML = '<p class="text-gray-400">This query requires no parameters.</p>';
+                }
+            }
+            executeBtn.addEventListener('click', async () => {
+                if (!currentQueryName) return;
+                const params = {};
+                const paramInputs = paramsForm.querySelectorAll('input');
+                let allParamsFilled = true;
+                paramInputs.forEach(input => {
+                    if(!input.value) allParamsFilled = false;
+                    params[input.name] = input.value;
+                });
+                if(!allParamsFilled) {
+                    showError('Please fill in all required parameters.');
+                    return;
+                }
+                showLoading();
+                try {
+                    const response = await fetch('/api/execute', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ query_name: currentQueryName, params })
+                    });
+                    const result = await response.json();
+                    if (!response.ok) throw new Error(result.error || 'An unknown error occurred.');
+                    displayResults(result);
+                } catch (error) {
+                    showError(error.message);
+                } finally {
+                    hideLoading();
+                }
+            });
+            function displayResults(data) {
+                hideResults();
+                resultsTableContainer.classList.remove('hidden');
+                resultsTableHead.innerHTML = '';
+                resultsTableBody.innerHTML = '';
+                const headerRow = document.createElement('tr');
+                data.keys.forEach(key => {
+                    const th = document.createElement('th');
+                    th.className = 'table-cell text-left text-xs font-medium text-gray-300 uppercase tracking-wider';
+                    th.textContent = key;
+                    headerRow.appendChild(th);
+                });
+                resultsTableHead.appendChild(headerRow);
+                if (data.records.length === 0) {
+                     const row = document.createElement('tr');
+                     const cell = document.createElement('td');
+                     cell.colSpan = data.keys.length || 1;
+                     cell.className = 'table-cell text-center text-gray-500';
+                     cell.textContent = 'Query executed successfully, but returned no results.';
+                     row.appendChild(cell);
+                     resultsTableBody.appendChild(row);
+                } else {
+                    data.records.forEach(record => {
+                        const row = document.createElement('tr');
+                        data.keys.forEach(key => {
+                            const cell = document.createElement('td');
+                            cell.className = 'table-cell text-sm';
+                            let value = record[key];
+                            if (typeof value === 'object' && value !== null) {
+                                value = JSON.stringify(value, null, 2);
+                            }
+                            cell.textContent = value;
+                            row.appendChild(cell);
+                        });
+                        resultsTableBody.appendChild(row);
+                    });
+                }
+            }
+            function showError(message) { hideResults(); errorDiv.classList.remove('hidden'); errorDiv.textContent = `Error: ${message}`; }
+            function showLoading() { hideResults(); loadingDiv.classList.remove('hidden'); executeBtn.disabled = true; }
+            function hideLoading() { loadingDiv.classList.add('hidden'); executeBtn.disabled = false; }
+            function hideResults() { errorDiv.classList.add('hidden'); resultsTableContainer.classList.add('hidden'); }
+            fetchAndBuildSidebar();
+        });
+    </script>
+</body>
+</html>
