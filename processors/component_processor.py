@@ -1,9 +1,10 @@
 from utils.neo4j_utils import execute_query, clean_properties
 
 class ComponentProcessor:
-    def __init__(self, keycloak_admin, neo4j_driver, logger):
+    def __init__(self, keycloak_admin, neo4j_driver, database, logger):
         self.keycloak_admin = keycloak_admin
         self.neo4j_driver = neo4j_driver
+        self.database = database
         self.logger = logger
     def process(self, realm_name):
         self.logger.info("Processing components (User Storage, etc.)...")
@@ -38,7 +39,7 @@ class ComponentProcessor:
                 SET c += $properties
                 MERGE (c)-[:IN_REALM]->(r)
             """
-            execute_query(self.neo4j_driver, self.logger, query, {
+            execute_query(self.neo4j_driver, self.database, self.logger, query, {
                 "realm_name": realm_name, 
                 "id": comp_id, 
                 "name": comp_name, 

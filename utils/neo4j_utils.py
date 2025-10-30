@@ -1,9 +1,10 @@
 import json
 import logging
 
-def execute_query(driver, logger, query, parameters=None):
+
+def execute_query(driver, database, logger, query, parameters=None):
     """Executes a Cypher query in a session."""
-    with driver.session() as session:
+    with driver.session(database=database) as session:
         try:
             session.run(query, parameters)
         except Exception as e:
@@ -11,7 +12,8 @@ def execute_query(driver, logger, query, parameters=None):
             logger.debug("Failed Query: %s", query)
             logger.debug("Failed Parameters: %s", parameters)
 
-def _flatten_and_clean_dict(data, parent_key='', sep='.'):
+
+def _flatten_and_clean_dict(data, parent_key="", sep="."):
     """Recursively flattens a nested dictionary and cleans values."""
     items = {}
     for key, value in data.items():
@@ -23,10 +25,11 @@ def _flatten_and_clean_dict(data, parent_key='', sep='.'):
         elif isinstance(value, bool):
             items[new_key] = str(value).lower()
         elif value is None:
-            items[new_key] = ''
+            items[new_key] = ""
         else:
             items[new_key] = value
     return items
+
 
 def clean_properties(properties, keys_to_ignore=None):
     """
@@ -46,7 +49,7 @@ def clean_properties(properties, keys_to_ignore=None):
     for key, value in properties.items():
         if key in ignore_set:
             continue
-        
+
         if isinstance(value, dict):
             cleaned.update(_flatten_and_clean_dict(value, parent_key=key))
         elif isinstance(value, list):
@@ -54,23 +57,50 @@ def clean_properties(properties, keys_to_ignore=None):
         elif isinstance(value, bool):
             cleaned[key] = str(value).lower()
         elif value is None:
-            cleaned[key] = ''
+            cleaned[key] = ""
         else:
             cleaned[key] = value
     return cleaned
 
-def clean_database(driver, logger):
+
+def initialize(driver, database, logger):
+    constraints = [
+        "CREATE CONSTRAINT IF NOT EXISTS FOR (u:User) REQUIRE u.id IS UNIQUE",
+        "CREATE CONSTRAINT IF NOT EXISTS FOR (r:Realm) REQUIRE r.name IS UNIQUE",
+        "CREATE CONSTRAINT IF NOT EXISTS FOR (g:Group) REQUIRE g.id IS UNIQUE",
+        "CREATE CONSTRAINT IF NOT EXISTS FOR (c:Client) REQUIRE c.internal_id IS UNIQUE",
+        "CREATE CONSTRAINT IF NOT EXISTS FOR (rr:RealmRole) REQUIRE (rr.realm, rr.name) IS UNIQUE",
+        "CREATE CONSTRAINT IF NOT EXISTS FOR (cr:ClientRole) REQUIRE (cr.client, cr.name) IS UNIQUE",
+    ]
+
+    with driver.session(database=database) as session:
+        try:
+            logger.info("Creating constaints")
+
+            for constraint in constraints:
+                session.run(constraint, None)
+
+            logger.info("Constraints created")
+        except Exception as e:
+            logger.error(
+                "An error occurred during database initialization: %s", e, exc_info=True
+            )
+
+
+def clean_database(driver, database, logger):
     """Deletes ALL nodes, relationships, indexes, and constraints from the database."""
     logger.warning("--- CLEANING DATABASE ---")
-    logger.warning("The --clean flag was used. This will delete ALL data and schema in the database.")
-    
-    with driver.session() as session:
+    logger.warning(
+        "The --clean flag was used. This will delete ALL data and schema in the database."
+    )
+
+    with driver.session(database=database) as session:
         try:
             # 1. Get and drop all constraints
             logger.info("Dropping all constraints...")
             constraints = session.run("SHOW CONSTRAINTS YIELD name").data()
             for constraint in constraints:
-                constraint_name = constraint['name']
+                constraint_name = constraint["name"]
                 logger.debug("Dropping constraint: %s", constraint_name)
                 # Use backticks to handle special characters in names
                 session.run(f"DROP CONSTRAINT `{constraint_name}`")
@@ -79,13 +109,15 @@ def clean_database(driver, logger):
             # 2. Get and drop all standalone indexes
             logger.info("Dropping all standalone indexes...")
             # Filter out indexes backing constraints as they are dropped automatically with constraints
-            indexes = session.run("SHOW INDEXES YIELD name, type WHERE type <> 'CONSTRAINT'").data()
+            indexes = session.run(
+                "SHOW INDEXES YIELD name, type WHERE type <> 'CONSTRAINT'"
+            ).data()
             for index in indexes:
-                index_name = index['name']
+                index_name = index["name"]
                 logger.debug("Dropping index: %s", index_name)
                 session.run(f"DROP INDEX `{index_name}`")
             logger.info("-> All standalone indexes dropped.")
-            
+
             # 3. Delete all remaining nodes and relationships
             logger.info("Deleting all nodes and relationships...")
             result = session.run("MATCH (n) DETACH DELETE n")
@@ -93,8 +125,10 @@ def clean_database(driver, logger):
             logger.info(
                 "-> All nodes and relationships deleted. Nodes deleted: %d, Relationships deleted: %d.",
                 summary.counters.nodes_deleted,
-                summary.counters.relationships_deleted
+                summary.counters.relationships_deleted,
             )
             logger.info("Database cleaning complete.")
         except Exception as e:
-            logger.error("An error occurred during database cleaning: %s", e, exc_info=True)
+            logger.error(
+                "An error occurred during database cleaning: %s", e, exc_info=True
+            )
